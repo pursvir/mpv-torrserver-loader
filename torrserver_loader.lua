@@ -24,6 +24,12 @@ local AUDIO_EXTS = {
     wma = true,
 }
 
+local function urldecode(url)
+    return url:gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end)
+end
+
 local function load_external_assets()
     local filename = mp.get_property("filename", "")
     local btih = filename:match("%?link=(" .. string.rep(".", 40) .. ")")
@@ -51,10 +57,9 @@ local function load_external_assets()
         return
     end
 
-    success = false
     local input_slaves_row = nil
     for row in m3u:gmatch("[^\r\n]+") do
-        if row:find(filename, 1, true) then
+        if urldecode(row):find(filename, 1, true) then
             success = true
             break
         end
