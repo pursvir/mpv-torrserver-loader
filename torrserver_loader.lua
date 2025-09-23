@@ -4,8 +4,11 @@
 
 local string = require "string"
 
-local TORRSERVER_HOST = "127.0.0.1"
-local TORRSERVER_PORT = "8090"
+local options = {
+    TORRSERVER_HOST = "127.0.0.1",
+    TORRSERVER_PORT = "8090",
+}
+require "mp.options".read_options(options, "torrserver-loader")
 
 -- TODO: extend this list
 local AUDIO_EXTS = {
@@ -30,30 +33,30 @@ local function urldecode(url)
     end)
 end
 
+local loadings = {}
+
 local function load_external_assets()
     local filename = mp.get_property("filename", "")
     local btih = filename:match("%?link=(" .. string.rep(".", 40) .. ")")
-    local request = io.popen(
-        "curl http://" .. TORRSERVER_HOST .. ":" .. TORRSERVER_PORT .. "/playlist?hash=" .. btih
+    local request, err = io.popen(
+        "curl http://" .. options.TORRSERVER_HOST .. ":" .. options.TORRSERVER_PORT .. "/playlist?hash=" .. btih
     )
-    local m3u = request:read("*a")
-    if not m3u then
-        print("Empty response from TorrServer's API!")
+    if not request then
+        mp.osd_message("Cannot call curl: ", err)
         return
     end
-    local success, _, exit_code = request:close()
+    ---@diagnostic disable: need-check-nil
+    local m3u = request:read("*a")
+    ---@diagnostic enable: need-check-nil
+    if not m3u then
+        mp.osd_message("No response from TorrServer's API!")
+        return
+    end
+    ---@diagnostic disable: need-check-nil
+    local success, reason, code = request:close()
+    ---@diagnostic enable: need-check-nil
     if not success then
-        if exit_code == 6 then
-            print("Couldn't resolve TorrServer's host!")
-        elseif exit_code == 7 then
-            print("Failed to make request to TorrServer's API!")
-        elseif exit_code == 28 then
-            print("Connection to TorrServer's API timed out!")
-        elseif exit_code == 127 then
-            print("curl command not found!")
-        else
-            print("Failed to load M3U!")
-        end
+        print("curl execution failed: ", reason .. " " .. code)
         return
     end
 
@@ -67,11 +70,11 @@ local function load_external_assets()
     end
     local EXTVLCOPT = "#EXTVLCOPT:input-slave="
     if not success then
-        print("Failed to parse current video info from M3U playlist!")
+        mp.osd_message("Failed to parse current video info from M3U playlist!")
         return
     end
     if not string.find(input_slaves_row, EXTVLCOPT, 0, true) then
-        print("This video doesn't contain any external subtitles and audio.")
+        mp.osd_message("This video doesn't contain any external subtitles and audio.")
         return
     end
 
@@ -80,12 +83,24 @@ local function load_external_assets()
         local ext = url:match(".*%.([^%.%?]+)%?")
         -- Not that informative, but that's all what I can get from TorrServer's API for now. :(
         local index = "Index " .. url:match("[?&]index=(%d+)")
-        if AUDIO_EXTS[ext] then
-            mp.commandv("audio-add", url, "auto", index)
-        else
-            mp.commandv("sub-add", url, "auto", index)
-        end
+        local loading = nil
+        loading = mp.command_native_async({
+            AUDIO_EXTS[ext] and "audio-add" or "sub-add", url, "auto", index,
+        }, function() end)
+        table.insert(loadings, loading)
     end
 end
 
-mp.register_event("file-loaded", load_external_assets)
+local function abort_loadings()
+    for index, loading in ipairs(loadings) do
+        mp.abort_async_command(loading)
+        table.remove(loadings, index)
+    end
+end
+
+for _, event in ipairs({ "file-loaded", "playlist-pos-changes" }) do
+    mp.register_event(event, function()
+        abort_loadings()
+        load_external_assets()
+    end)
+end
