@@ -56,10 +56,11 @@ local function load_external_assets()
     local success, reason, code = request:close()
     ---@diagnostic enable: need-check-nil
     if not success then
-        print("curl execution failed: ", reason .. " " .. code)
+        mp.osd_message("curl execution failed: ", reason .. " " .. code)
         return
     end
 
+    success = false
     local input_slaves_row = nil
     for row in m3u:gmatch("[^\r\n]+") do
         if urldecode(row):find(filename, 1, true) then
@@ -82,10 +83,9 @@ local function load_external_assets()
     for url in (input_slaves_row):gmatch("(.-)#") do
         local ext = url:match(".*%.([^%.%?]+)%?")
         -- Not that informative, but that's all what I can get from TorrServer's API for now. :(
-        local index = "Index " .. url:match("[?&]index=(%d+)")
-        local loading = nil
-        loading = mp.command_native_async({
-            AUDIO_EXTS[ext] and "audio-add" or "sub-add", url, "auto", index,
+        local caption = "Index " .. url:match("[?&]index=(%d+)")
+        local loading = mp.command_native_async({
+            AUDIO_EXTS[ext] and "audio-add" or "sub-add", url, "auto", caption,
         }, function() end)
         table.insert(loadings, loading)
     end
