@@ -1,6 +1,6 @@
 # mpv-torrserver-loader
 
-MPV script which autoloads external subtitles and audio for current video from [TorrServer](https://github.com/YouROK/TorrServer).
+MPV script which allows you to view and open torrents from a [TorrServer](https://github.com/YouROK/TorrServer) (Ctrl + T) along with autoloads external subtitles and audio for current video from.
 
 # Dependencies
 
