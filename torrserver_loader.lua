@@ -1,4 +1,4 @@
--- Lua script for MPV to load external subtitles and audios based on the current video series M3U info from TorrServerq.
+-- Lua script for MPV to load external subtitles and audios based on the current video series M3U info from TorrServer.
 --
 -- Requires **curl** to be installed in your OS.
 
@@ -6,12 +6,12 @@ local mp = require "mp"
 local utils = require "mp.utils"
 
 local options = {
-    TORRSERVER_URL_HOST = "127.0.0.1",
-    TORRSERVER_URL_PORT = "8090",
+    TORRSERVER_HOST = "127.0.0.1",
+    TORRSERVER_PORT = "8090",
 }
 require "mp.options".read_options(options, "torrserver-loader")
 
-local TORRSERVER_URL = "http://" .. options.TORRSERVER_URL_HOST .. ":" .. options.TORRSERVER_URL_PORT
+local TORRSERVER = "http://"..options.TORRSERVER_HOST..":"..options.TORRSERVER_PORT
 
 local torrents = {}
 local menu = {}
@@ -20,9 +20,84 @@ local state = "hidden" -- torrents | files | hidden
 local torrent_index = 1
 local VISIBLE_LINES = 12
 local offset = 0
+local opened_btih
 
+local back
 
-local function curl(url, data)
+-- https://github.com/YouROK/TorrServer/blob/master/server/utils/filetypes.go#L10
+local VIDEO_EXTS = {
+    ['3g2'] = true,
+    ['3gp'] = true,
+    aaf = true,
+    asf = true,
+    avchd = true,
+    avi = true,
+    drc = true,
+    flv = true,
+    m2ts = true,
+    m2v = true,
+    m4p = true,
+    m4v = true,
+    mkv = true,
+    mng = true,
+    mov = true,
+    mp2 = true,
+    mp4 = true,
+    mpe = true,
+    mpeg = true,
+    mpg = true,
+    mpv = true,
+    mts = true,
+    mxf = true,
+    nsv = true,
+    ogv = true,
+    qt = true,
+    rm = true,
+    rmvb = true,
+    roq = true,
+    svi = true,
+    ts = true,
+    vob = true,
+    webm = true,
+    wmv = true,
+    yuv = true
+}
+local AUDIO_EXTS = {
+    aac = true,
+    aiff = true,
+    ape = true,
+    au = true,
+    dff = true,
+    dsd = true,
+    dsf = true,
+    flac = true,
+    gsm = true,
+    it = true,
+    m3u = true,
+    m4a = true,
+    mid = true,
+    mod = true,
+    mp3 = true,
+    mpa = true,
+    mpga = true,
+    oga = true,
+    ogg = true,
+    opus = true,
+    pls = true,
+    ra = true,
+    s3m = true,
+    sid = true,
+    spx = true,
+    wav = true,
+    wma = true,
+    xm = true,
+    ac3 = true,
+    aif = true,
+    amr = true,
+    mka = true
+}
+
+local function curl(url, json, data)
     mp.osd_message("Requesting TorrServer's API...", 99)
     local args
     if data then
@@ -58,21 +133,12 @@ local function curl(url, data)
         return
     end
 
-    if data then
+    if data or json then
         response = utils.parse_json(response)
     end
 
     mp.osd_message("")
     return response
-end
-
-local function load_torrents()
-    torrents = curl(TORRSERVER_URL .. "/torrents", '{"action":"list"}')
-    --- @diagnostic disable: param-type-mismatch, need-check-nil
-    for i, _ in ipairs(torrents) do
-        torrents[i].index = i
-    --- @diagnostic enable: param-type-mismatch, need-check-nil
-    end
 end
 
 local function torr_osd()
@@ -104,99 +170,230 @@ local function torr_osd()
     mp.osd_message(text, 60)
 end
 
+local function remove_menu_keys()
+    mp.remove_key_binding("torr_up")
+    mp.remove_key_binding("torr_down")
+    mp.remove_key_binding("torr_enter")
+    mp.remove_key_binding("torr_back")
+    mp.remove_key_binding("torr_close")
+end
+
 local function close_menu()
     state = "hidden"
+    remove_menu_keys()
     mp.osd_message("")
 end
 
-local function get_lines_from_string(s)
-    return s:gmatch("([^\r\n]+)")
+-- external name
+local function replace(s, needle)
+    local i, j = s:find(needle, 1, true)
+    if i then
+        s = s:sub(1, i - 1) .. s:sub(j + 1)
+    end
+    return s
 end
 
-local function get_torrent_tracks(torrent)
-    local function split(str, sep)
-        local t = {}
-        for s in str:gmatch("[^" .. sep .. "]+") do
-            table.insert(t, s)
-        end
-        return t
+local function remove_extra_spaces(s)
+    s = s:gsub("^%s+", "")  -- remove the spaces at the beginning
+    s = s:gsub("%s+$", "")  -- remove spaces at the end
+    s = s:gsub("%s+", " ")  -- replace multiple spaces with one
+    return s
+end
+
+local function remove_duplicate_words(str)
+    local seen = {}
+    local result = {}
+
+    -- a function for clearing words from quotation marks/brackets and reducing them to lowercase
+    local function clean_word(word)
+        -- we remove all [], (), "" and spaces inside, and reduce them to lowercase
+        word = word:gsub("[%[%]()\"]", ""):gsub("%s+", "")
+        return word:lower()
     end
 
-    local response = curl(TORRSERVER_URL .. "/playlist?hash=" .. torrent.hash)
-
-    local tracks = {}
-
-    local current = {
-        title = nil,
-        duration = nil,
-        vlcopt = {}
-    }
-
-    for line in get_lines_from_string(response) do
-        line = line:gsub("\r", "")
-
-        local dur, title = line:match("^#EXTINF:([^,]*),(.*)")
-        if dur then
-            current.duration = tonumber(dur) or -1
-            current.title = title
+    for word in str:gmatch("%S+") do
+        local cleaned = clean_word(word)
+        if cleaned and not seen[cleaned] then
+            seen[cleaned] = true
+            table.insert(result, word) -- inserting the original word with quotes/brackets
         end
+    end
 
-        local opt, value = line:match("^#EXTVLCOPT:([^=]+)=(.+)")
-        if opt then
-            opt = opt:gsub("%-", "_")
+    return table.concat(result, " ")
+end
 
-            if opt == "input_slave" then
-                current.vlcopt.input_slave = split(value, "#")
+local function format_external_filename(basename, filename_path, torrent_name)
+    -- removing the file extension
+    local name = filename_path:match("^(.*)%.%w+$")
+    -- removing the base file name
+    name = replace(name, basename)
+    -- deleting the torrent name (usually the name of the root folder)
+    name = replace(name, torrent_name)
+    -- removing the dots "." and slashes "/"
+    name = name:gsub("[./]", " ")
+    name = remove_extra_spaces(name)
+    name = remove_duplicate_words(name)
+
+    if name == "" then return nil end
+
+    return name
+end
+
+
+local function edlencode(url)
+    return "%" .. string.len(url) .. "%" .. url
+end
+
+local function name_of_file(fileinfo)
+    fileinfo.filename = fileinfo.path:match("^.+[\\/](.+)$") or fileinfo.path
+    fileinfo.name, fileinfo.ext = fileinfo.filename:match("^(.*)%.([^%.]+)$")
+end
+
+-- https://github.com/mpv-player/mpv/blob/master/DOCS/edl-mpv.rst
+local function generate_m3u_edl(torrent)
+    -- Portions of this code are derived from https://github.com/dyphire/mpv-scripts/blob/main/mpv-torrserver.lua#L123
+    -- Copyright (c) <2022> dyphire
+    -- Licensed under the MIT License https://github.com/dyphire/mpv-scripts/blob/main/LICENSE
+
+    local playlist = { "#EXTM3U", "# Generated by TorrServer-Loader" }
+    local count = 0
+
+    for _, fileinfo in ipairs(torrent.file_stats) do
+        if not fileinfo.filename then name_of_file(fileinfo) end
+
+        if not fileinfo.processed and VIDEO_EXTS[fileinfo.ext] then
+            table.insert(playlist, '#EXTINF:0,' .. fileinfo.name)
+
+            local url = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo.id .. "&play"
+            local hdr = { "!new_stream", "!no_clip",
+                --"!track_meta,title=" .. edlencode(basename),
+                          edlencode(url)
+            }
+            local edl = "edl://" .. table.concat(hdr, ";") .. ";"
+            local external_tracks = 0
+
+            fileinfo.processed = true
+            fileinfo.main_file = true
+            count = count + 1
+            --mp.msg.info("!" .. fileinfo.name)
+            for _, fileinfo2 in ipairs(torrent.file_stats) do
+                if not fileinfo2.filename then name_of_file(fileinfo2) end
+
+                if not fileinfo2.processed and not VIDEO_EXTS[fileinfo2.ext] and string.find(fileinfo2.name, fileinfo.name, 1, true) then
+                    --mp.msg.info("->" .. fileinfo2.name)
+                    local title = format_external_filename(fileinfo.name, fileinfo2.path, torrent.name) or ("Unknown name (Index "..fileinfo2.id .. ")")
+                    local url = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo2.id .. "&play"
+                    local hdr = { "!new_stream", "!no_clip", "!no_chapters",
+                                  "!delay_open,media_type=" .. (AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"),
+                                  "!track_meta,title=" .. edlencode(title),
+                                  edlencode(url)
+                    }
+                    edl = edl .. table.concat(hdr, ";") .. ";"
+                    fileinfo2.processed = true
+                    count = count + 1
+                    external_tracks = external_tracks + 1
+                end
+            end
+
+            if external_tracks == 0 then -- dont use edl
+                table.insert(playlist, url)
             else
-                current.vlcopt[opt] = value
+                fileinfo.count_ext_tracks = external_tracks
+                table.insert(playlist, edl)
             end
         end
+    end
 
-        -- Media URL
-        if line ~= "" and not line:match("^#") then
-            current.url = line
-
-            table.insert(tracks, {
-                title = current.title,
-                duration = current.duration,
-                url = current.url,
-                vlcopt = current.vlcopt
-            })
-
-            current = {
-                title = nil,
-                duration = nil,
-                vlcopt = {}
-            }
+    -- if this playlist is audio only
+    if #torrent.file_stats > count then
+        for _, fileinfo in ipairs(torrent.file_stats) do
+            if not fileinfo.processed and AUDIO_EXTS[fileinfo.ext] then
+                fileinfo.processed = true
+                fileinfo.main_file = true
+                table.insert(playlist, '#EXTINF:0,' .. fileinfo.name)
+                local url = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo.id .. "&play"
+                table.insert(playlist, url)
+            end
         end
     end
 
-    return tracks
+    torrent.playlist = table.concat(playlist, '\n')
+end
+
+local function load_files(torrent)
+    menu = {}
+    cursor_pos = 1
+    offset = 0
+    state = "files"
+
+    generate_m3u_edl(torrent)
+
+    for _, fileinfo in ipairs(torrent.file_stats) do
+        if fileinfo.main_file then
+            table.insert(menu, fileinfo.filename)
+        end
+    end
+
+    torr_osd()
 end
 
 local function play_from_playlist(torrent, index)
     close_menu()
-    local playlist_url = string.format(
-        "%s/playlist/?hash=%s",
-        TORRSERVER_URL,
-        torrent.hash
-    )
 
-    torrent.position = index
-    state = "hidden"
     mp.osd_message("Opening " .. (torrent.name or torrent.title) .. "...")
 
-    mp.commandv("loadlist", playlist_url, "replace")
+    opened_btih = torrent.hash
+    mp.commandv("loadlist", "memory://" .. torrent.playlist)
     mp.set_property_number("playlist-pos", index - 1)
 end
 
+local function enter()
+    if state == "torrents" then
+        torrent_index = cursor_pos
+        load_files(torrents[cursor_pos])
+    elseif state == "files" then
+        play_from_playlist(torrents[torrent_index], cursor_pos)
+    end
+end
+
+local function add_menu_keys()
+    mp.add_forced_key_binding("UP", "torr_up", function()
+        if cursor_pos > 1 then
+            cursor_pos = cursor_pos - 1
+
+            if cursor_pos <= offset then
+                offset = math.max(0, cursor_pos - 1)
+            end
+
+            torr_osd()
+        end
+    end, { repeatable = true })
+
+    mp.add_forced_key_binding("DOWN", "torr_down", function()
+        if cursor_pos < #menu then
+            cursor_pos = cursor_pos + 1
+
+            if cursor_pos > offset + VISIBLE_LINES then
+                offset = cursor_pos - VISIBLE_LINES
+            end
+
+            torr_osd()
+        end
+    end, { repeatable = true })
+
+    mp.add_forced_key_binding("ENTER", "torr_enter", enter)
+    mp.add_forced_key_binding("BS", "torr_back", back)
+    mp.add_forced_key_binding("ESC", "torr_close", close_menu)
+end
+
 local function show_torrents()
-    load_torrents()
+    torrents = curl(TORRSERVER .. "/torrents", true, '{"action":"list"}')
 
     menu = {}
     cursor_pos = 1
     offset = 0
     state = "torrents"
+    add_menu_keys()
 
     for _, t in ipairs(torrents) do
         table.insert(menu, t.name or t.title)
@@ -205,256 +402,79 @@ local function show_torrents()
     torr_osd()
 end
 
-local function show_torrent_files(torrent)
-    menu = {}
-    cursor_pos = 1
-    offset = 0
-    state = "files"
-
-    torrent.tracks = get_torrent_tracks(torrent)
-
-    for _, track in ipairs(torrent.tracks) do
-        table.insert(menu, track.title)
+back = function()
+    if state == "files" then
+        show_torrents()
+    else
+        close_menu()
     end
-
-    torr_osd()
 end
 
 mp.add_key_binding("Ctrl+t", "torr_open", show_torrents)
 
-mp.add_forced_key_binding("UP", "torr_up", function()
-    if cursor_pos > 1 then
-        cursor_pos = cursor_pos - 1
-
-        if cursor_pos <= offset then
-            offset = math.max(0, cursor_pos - 1)
-        end
-
-        torr_osd()
-    end
-end, { repeatable = true })
-
-mp.add_forced_key_binding("DOWN", "torr_down", function()
-    if cursor_pos < #menu then
-        cursor_pos = cursor_pos + 1
-
-        if cursor_pos > offset + VISIBLE_LINES then
-            offset = cursor_pos - VISIBLE_LINES
-        end
-
-        torr_osd()
-    end
-end, { repeatable = true })
-
-mp.add_forced_key_binding("ENTER", "torr_enter", function()
-    if state == "torrents" then
-        torrent_index = cursor_pos
-        show_torrent_files(torrents[cursor_pos])
-    elseif state == "files" then
-        play_from_playlist(torrents[torrent_index], cursor_pos)
-    end
-end)
-
-mp.add_forced_key_binding("BS", "torr_back", function()
-    if state == "files" then
-        show_torrents()
-    else
-        state = "hidden"
-        mp.osd_message("")
-    end
-end)
-
-mp.add_forced_key_binding("ESC", "torr_close", close_menu)
-
-
--- Loader
-
--- TODO: extend this list
-local AUDIO_EXTS = {
-    aac = true,
-    ac3 = true,
-    aif = true,
-    aiff = true,
-    amr = true,
-    flac = true,
-    m4a = true,
-    mka = true,
-    mp3 = true,
-    ogg = true,
-    opus = true,
-    wav = true,
-    wma = true,
-}
-
-local loadings = {}
-local total_files = 0
-local loaded_files = 0
-local error_files = 0
-
-local function update_loading_osd()
-    local timeout = 120
-    if total_files == loaded_files + error_files then
-        timeout = 5
-    end
-    mp.osd_message(
-        string.format("Loaded external files: %d/%d, Errors %d", loaded_files, total_files, error_files),
-        timeout
-    )
-end
-
-local function urldecode(url)
-    return url:gsub("%%(%x%x)", function(hex)
-        return string.char(tonumber(hex, 16))
-    end)
-end
-
-local function extract_external_name(url_ext, url_main, torrent)
-    -- external name
-    local function replace(str, substr)
-        local i, j = str:find(substr, 1, true)
-        if i then
-            str = str:sub(1, i - 1) .. str:sub(j + 1)
-        end
-        return str
-    end
-
-    local function remove_extra_spaces(s)
-        s = s:gsub("^%s+", "") -- remove the spaces at the beginning
-        s = s:gsub("%s+$", "") -- remove spaces at the end
-        s = s:gsub("%s+", " ") -- replace multiple spaces with one
-        return s
-    end
-
-    local function remove_duplicate_words(str)
-        local seen = {}
-        local result = {}
-
-        -- a function for clearing words from quotation marks/brackets and reducing them to lowercase
-        local function clean_word(word)
-            -- Removing all [], (), "" and spaces inside, and reducing them to lowercase
-            return word:gsub("[%[%]()\"]", ""):gsub("%s+", ""):lower()
-        end
-
-        for word in str:gmatch("%S+") do
-            local cleaned = clean_word(word)
-            if cleaned and not seen[cleaned] then
-                seen[cleaned] = true
-                table.insert(result, word) -- inserting the original word with quotes/brackets
-            end
-        end
-
-        return table.concat(result, " ")
-    end
-
-    if not torrent.file_stats or not torrent.name then return nil end
-
-    local index = tonumber(url_ext:match("index=(%d+)"))
-    local file_stat = torrent.file_stats[index]
-    if not file_stat then return nil end
-    local name = file_stat.path
-    local filename_main = urldecode(url_main)
-    -- Everything before the file extension
-    filename_main = filename_main:match("^(.*)%.%w+")
-    -- Removing the file extension
-    name = name:match("^(.*)%.%w+$")
-    name = replace(name, torrent.name)
-    name = replace(name, filename_main)
-    name = name:gsub("[./]", " ")
-    name = remove_extra_spaces(name)
-    name = remove_duplicate_words(name)
-
-    return name
-end
 
 local function load_external_assets()
-    if not mp.get_property("path"):find(TORRSERVER_URL, 1, true) then
+    local path = mp.get_property("path", "")
+    if not path:find(TORRSERVER, 1, true) then
         return
     end
-    local filename = mp.get_property("filename", "")
-    local file_btih = filename:match("%?link=(" .. string.rep(".", 40) .. ")")
-    if not file_btih then
-        mp.osd_message("Invalid BTIH extracted from filename!", 7)
+    if mp.get_property("playlist-path", ""):find("# Generated by TorrServer-Loader", 1, true) then
+        return
+    end
+    local btih = path:match("%link=(" .. string.rep(".",40) .. ")")
+    if not btih then
+        mp.osd_message("Invalid BTIH extracted from path!", 7)
+        return
+    end
+    if opened_btih and opened_btih == btih and not mp.get_property("media-title", ""):find(btih, 1, true) then
         return
     end
 
-    local function find_torrent(btih)
-        for _, t in ipairs(torrents) do
-            if t.hash == btih then
-                return t
-            end
+    local torrent
+    for _, t in ipairs(torrents) do
+        if t.hash == btih then
+            torrent = t
+            break
         end
     end
-
-    local torrent = find_torrent(file_btih)
-    if not torrent or not torrent.file_stats then
-        load_torrents()
-        local new_torrent = find_torrent(file_btih)
-        if not new_torrent then
+    if not torrent then
+        torrent = curl(TORRSERVER .. "/stream?link=" .. btih .. "&stat", true)
+        if not torrent then
             mp.osd_message("Failed to find torrent!", 7)
             return
         end
-        if torrent and torrent.tracks then
-            new_torrent.tracks = torrent.tracks
-        end
-        torrent = new_torrent
+        table.insert(torrents, torrent)
     end
 
-    if not torrent.tracks then
-        torrent.tracks = get_torrent_tracks(torrent)
+    local memory_link = torrent.playlist
+    if not memory_link then
+        generate_m3u_edl(torrent)
+        memory_link = torrent.playlist
     end
+    --mp.msg.info(memory_link)
 
-    local track
-    for _, t in ipairs(torrent.tracks) do
-        if urldecode(t.url):find(urldecode(filename), 1, true) then
-            track = t
-        end
-    end
-
-    if not track then
-        mp.osd_message("Failed to parse current video info from M3U playlist!", 7)
-        return
-    end
-
-    if not track.vlcopt.input_slave then
-        mp.osd_message("This video doesn't contain any external subtitles and audio.", 7)
-        return
-    end
-
-    loaded_files = 0
-    loadings = {}
-    total_files = #track.vlcopt.input_slave
-    error_files = 0
-
-    for _, url in ipairs(track.vlcopt.input_slave) do
-        local ext = url:match(".*%.([^%.%?]+)%?")
-        local caption = extract_external_name(url, filename, torrent) or ("Index " .. (url:match("index=(%d+)") or "?"))
-        local cmd = AUDIO_EXTS[ext] and "audio-add" or "sub-add"
-
-        local loading = mp.command_native_async({ cmd, url, "auto", caption }, function(success)
-            if success then
-                loaded_files = loaded_files + 1
-                mp.command("script-message trigger-trackselect")
-            else
-                error_files = error_files + 1
+    -- finding pos of playlist
+    local count = 0
+    local play_index = 1
+    local found_pos = false
+    local file_index = tonumber(path:match("index=(%d+)"))
+    for _, fileinfo in ipairs(torrent.file_stats) do
+        if fileinfo.main_file then
+            if fileinfo.id == file_index then
+                play_index = count
+                found_pos = true
+                break
             end
-            update_loading_osd()
-        end)
-        table.insert(loadings, loading)
+            count = count + 1
+        end
+    end
+    if not found_pos then
+        mp.msg.warn("Couldn't find playlist position")
     end
 
-    update_loading_osd()
+    opened_btih = btih
+    mp.commandv("loadlist", "memory://" .. memory_link)
+    mp.set_property_number("playlist-pos", play_index)
 end
 
-local function abort_loadings()
-    for _, loading in ipairs(loadings) do
-        mp.abort_async_command(loading)
-    end
-    loadings = {}
-end
-
-for _, event in ipairs({ "file-loaded", "playlist-pos-changes" }) do
-    mp.register_event(event, function()
-        abort_loadings()
-        load_external_assets()
-    end)
-end
+mp.add_hook("on_load", 5, load_external_assets)
