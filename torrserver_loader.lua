@@ -285,7 +285,7 @@ local function generate_m3u_edl(torrent)
                     local url = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo2.id .. "&play"
                     local hdr = { "!new_stream", "!no_clip", "!no_chapters",
                                   "!delay_open,media_type=" .. (AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"),
-                                  "!track_meta,title=" .. edlencode(title),
+                                  "!track_meta,title=" .. edlencode(title .. " [external]"),
                                   edlencode(url)
                     }
                     edl = edl .. table.concat(hdr, ";") .. ";"
