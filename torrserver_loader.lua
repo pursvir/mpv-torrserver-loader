@@ -459,17 +459,22 @@ local function load_external_assets()
         return
     end
 
-    local torrent
-    for _, t in ipairs(torrents) do
+    local torrent, torr_i
+    for i, t in ipairs(torrents) do
         if t.hash == btih then
             torrent = t
+            torr_i = i
             break
         end
     end
     if not torrent or not torrent.file_stats then
         torrent = curl(TORRSERVER .. "/stream?link=" .. btih .. "&stat")
         if not torrent then return end
-        table.insert(torrents, torrent)
+        if torr_i then
+            torrents[torr_i] = torrent
+        else
+            table.insert(torrents, torrent)
+        end
     end
 
     local memory_link = torrent.playlist
