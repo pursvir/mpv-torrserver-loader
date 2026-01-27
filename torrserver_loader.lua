@@ -350,7 +350,9 @@ end
 local function enter()
     if state == "torrents" then
         if not torrents[cursor_pos].file_stats then
-            torrents[cursor_pos] = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat", true)
+            local torrent = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat", true)
+            if not torrent then return end
+            torrents[cursor_pos] = torrent
         end
         torrent_index = cursor_pos
         load_files(torrents[cursor_pos])
@@ -391,6 +393,7 @@ end
 
 local function show_torrents()
     torrents = curl(TORRSERVER .. "/torrents", true, '{"action":"list"}')
+    if not torrents then return end
 
     menu = {}
     cursor_pos = 1
@@ -442,10 +445,7 @@ local function load_external_assets()
     end
     if not torrent then
         torrent = curl(TORRSERVER .. "/stream?link=" .. btih .. "&stat", true)
-        if not torrent then
-            mp.osd_message("Failed to find torrent!", 7)
-            return
-        end
+        if not torrent then return end
         table.insert(torrents, torrent)
     end
 
