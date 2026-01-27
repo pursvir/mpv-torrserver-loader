@@ -281,13 +281,13 @@ local function generate_m3u_edl(torrent)
                 if not fileinfo2.processed and not VIDEO_EXTS[fileinfo2.ext] and string.find(fileinfo2.name, fileinfo.name, 1, true) then
                     --mp.msg.info("->" .. fileinfo2.name)
                     local title = format_external_filename(fileinfo.name, fileinfo2.path, torrent.name) or ("Unknown name (Index "..fileinfo2.id .. ")")
-                    local url = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo2.id .. "&play"
-                    local hdr = { "!new_stream", "!no_clip", "!no_chapters",
+                    local url_ext = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo2.id .. "&play"
+                    local hdr_ext = { "!new_stream", "!no_clip", "!no_chapters",
                                   "!delay_open,media_type=" .. (AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"),
                                   "!track_meta,title=" .. edlencode(title .. " [external]"),
-                                  edlencode(url)
+                                  edlencode(url_ext)
                     }
-                    edl = edl .. table.concat(hdr, ";") .. ";"
+                    edl = edl .. table.concat(hdr_ext, ";") .. ";"
                     fileinfo2.processed = true
                     count = count + 1
                     external_tracks = external_tracks + 1
