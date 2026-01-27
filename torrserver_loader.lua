@@ -98,7 +98,7 @@ local AUDIO_EXTS = {
     mka = true
 }
 
-local function curl(url, json, data)
+local function curl(url, data)
     mp.osd_message("Requesting TorrServer's API...", 99)
     local args
     if data then
@@ -134,9 +134,7 @@ local function curl(url, json, data)
         return
     end
 
-    if data or json then
-        response = utils.parse_json(response)
-    end
+    response = utils.parse_json(response)
 
     mp.osd_message("")
     return response
@@ -351,7 +349,7 @@ end
 local function enter()
     if state == "torrents" then
         if not torrents[cursor_pos].file_stats then
-            local torrent = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat", true)
+            local torrent = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat")
             if not torrent then return end
             torrents[cursor_pos] = torrent
         end
@@ -393,7 +391,7 @@ local function add_menu_keys()
 end
 
 local function show_torrents()
-    torrents = curl(TORRSERVER .. "/torrents", true, '{"action":"list"}')
+    torrents = curl(TORRSERVER .. "/torrents", '{"action":"list"}')
     if not torrents then return end
 
     menu = {}
@@ -469,7 +467,7 @@ local function load_external_assets()
         end
     end
     if not torrent or not torrent.file_stats then
-        torrent = curl(TORRSERVER .. "/stream?link=" .. btih .. "&stat", true)
+        torrent = curl(TORRSERVER .. "/stream?link=" .. btih .. "&stat")
         if not torrent then return end
         table.insert(torrents, torrent)
     end
