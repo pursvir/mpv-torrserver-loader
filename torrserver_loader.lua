@@ -481,3 +481,29 @@ local function load_external_assets()
 end
 
 mp.add_hook("on_load", 5, load_external_assets)
+
+-- By default, edl inserts a chapter with a link in the name, we fix this by deleting it.
+-- https://github.com/mpv-player/mpv/blob/master/DOCS/edl-mpv.rst#implicit-chapters
+local function fix_edl_chapters()
+    if not mp.get_property("path", ""):find(TORRSERVER, 1, true) then
+        return
+    end
+
+    local chapters = mp.get_property_native("chapter-list")
+    if not chapters then return end
+
+    local found = false
+    for i = #chapters, 1, -1 do
+        local ch = chapters[i]
+        if ch.time == 0 and ch.title and ch.title:find(TORRSERVER, 1, true) then
+            table.remove(chapters, i)
+            found = true
+            break
+        end
+    end
+    if not found then return end
+
+    mp.set_property_native("chapter-list", chapters)
+end
+
+mp.add_hook("on_preloaded", 5, fix_edl_chapters)
