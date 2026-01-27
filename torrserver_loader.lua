@@ -349,6 +349,9 @@ end
 
 local function enter()
     if state == "torrents" then
+        if not torrents[cursor_pos].file_stats then
+            torrents[cursor_pos] = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat", true)
+        end
         torrent_index = cursor_pos
         load_files(torrents[cursor_pos])
     elseif state == "files" then
