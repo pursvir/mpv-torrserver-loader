@@ -443,7 +443,7 @@ local function load_external_assets()
             break
         end
     end
-    if not torrent then
+    if not torrent or not torrent.file_stats then
         torrent = curl(TORRSERVER .. "/stream?link=" .. btih .. "&stat", true)
         if not torrent then return end
         table.insert(torrents, torrent)
