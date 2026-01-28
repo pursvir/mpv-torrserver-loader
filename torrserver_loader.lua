@@ -17,7 +17,8 @@ local TORRSERVER = options.TORRSERVER_SCHEME .. "://"..options.TORRSERVER_HOST..
 local torrents = {}
 local menu = {}
 local cursor_pos = 1
-local state = "hidden" -- torrents | files | hidden
+local State = { HIDDEN = 0, TORRENTS = 1, FILES = 2, }
+local state = State.HIDDEN
 local torrent_index = 1
 local VISIBLE_LINES = 12
 local offset = 0
@@ -142,12 +143,12 @@ end
 
 local function torr_osd()
     local osd_title
-    if state == "hidden" then
+    if state == State.HIDDEN then
         mp.osd_message("")
         return
-    elseif state == "torrents" then
+    elseif state == State.TORRENTS then
         osd_title = "torrent list"
-    elseif state == "files" then
+    elseif state == State.FILES then
         osd_title = "torrent content"
     end
 
@@ -178,7 +179,7 @@ local function remove_menu_keys()
 end
 
 local function close_menu()
-    state = "hidden"
+    state = State.HIDDEN
     remove_menu_keys()
     mp.osd_message("")
 end
@@ -266,7 +267,7 @@ local function generate_m3u_edl(torrent)
             local url = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo.id .. "&play"
             local hdr = { "!new_stream", "!no_clip",
                 --"!track_meta,title=" .. edlencode(basename),
-                          edlencode(url)
+                edlencode(url)
             }
             local edl = "edl://" .. table.concat(hdr, ";") .. ";"
             local external_tracks = 0
@@ -274,18 +275,20 @@ local function generate_m3u_edl(torrent)
             fileinfo.processed = true
             fileinfo.main_file = true
             count = count + 1
-            --mp.msg.info("!" .. fileinfo.name)
+            --mp.msg.info("Attached main file: " .. fileinfo.name)
             for _, fileinfo2 in ipairs(torrent.file_stats) do
                 if not fileinfo2.filename then name_of_file(fileinfo2) end
 
                 if not fileinfo2.processed and not VIDEO_EXTS[fileinfo2.ext] and string.find(fileinfo2.name, fileinfo.name, 1, true) then
-                    --mp.msg.info("->" .. fileinfo2.name)
+                    --mp.msg.info("Attached external track: " .. fileinfo2.name)
                     local title = format_external_filename(fileinfo.name, fileinfo2.path, torrent.name) or ("Unknown name (Index "..fileinfo2.id .. ")")
+                    -- TODO: check if we can assign those values to upper url and hdr vars
                     local url_ext = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. fileinfo2.id .. "&play"
-                    local hdr_ext = { "!new_stream", "!no_clip", "!no_chapters",
-                                  "!delay_open,media_type=" .. (AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"),
-                                  "!track_meta,title=" .. edlencode(title .. " [external]"),
-                                  edlencode(url_ext)
+                    local hdr_ext = {
+                        "!new_stream", "!no_clip", "!no_chapters",
+                        "!delay_open,media_type=" .. (AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"),
+                        "!track_meta,title=" .. edlencode(title .. " [external]"),
+                        edlencode(url_ext)
                     }
                     edl = edl .. table.concat(hdr_ext, ";") .. ";"
                     fileinfo2.processed = true
@@ -319,11 +322,11 @@ local function generate_m3u_edl(torrent)
     torrent.playlist = table.concat(playlist, '\n')
 end
 
-local function load_files(torrent)
+local function show_torrent_files(torrent)
     menu = {}
     cursor_pos = 1
     offset = 0
-    state = "files"
+    state = State.FILES
 
     generate_m3u_edl(torrent)
 
@@ -347,15 +350,15 @@ local function play_from_playlist(torrent, index)
 end
 
 local function enter()
-    if state == "torrents" then
+    if state == State.TORRENTS then
         if not torrents[cursor_pos].file_stats then
             local torrent = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat")
             if not torrent then return end
             torrents[cursor_pos] = torrent
         end
         torrent_index = cursor_pos
-        load_files(torrents[cursor_pos])
-    elseif state == "files" then
+        show_torrent_files(torrents[cursor_pos])
+    elseif state == State.FILES then
         play_from_playlist(torrents[torrent_index], cursor_pos)
     end
 end
@@ -397,7 +400,7 @@ local function show_torrents()
     menu = {}
     cursor_pos = 1
     offset = 0
-    state = "torrents"
+    state = State.TORRENTS
     add_menu_keys()
 
     for _, t in ipairs(torrents) do
@@ -408,7 +411,7 @@ local function show_torrents()
 end
 
 back = function()
-    if state == "files" then
+    if state == State.FILES then
         show_torrents()
     else
         close_menu()
