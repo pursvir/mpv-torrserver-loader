@@ -2,8 +2,8 @@
 --
 -- Requires **curl** to be installed in your OS.
 
-local mp = require "mp"
 local utils = require "mp.utils"
+local input = require "mp.input"
 
 local options = {
     TORRSERVER_SCHEME = "http",
@@ -15,16 +15,10 @@ require "mp.options".read_options(options, "torrserver-loader")
 local TORRSERVER = options.TORRSERVER_SCHEME .. "://" .. options.TORRSERVER_HOST .. ":" .. options.TORRSERVER_PORT
 
 local torrents = {}
-local menu = {}
-local cursor_pos = 1
-local State = { HIDDEN = 0, TORRENTS = 1, FILES = 2, }
-local state = State.HIDDEN
 local torrent_index = 1
-local VISIBLE_LINES = 12
-local offset = 0
 local opened_btih
 
-local back
+local show_torrents
 
 -- https://github.com/YouROK/TorrServer/blob/master/server/utils/filetypes.go#L10
 local VIDEO_EXTS = {
@@ -139,49 +133,6 @@ local function curl(url, data)
 
     mp.osd_message("")
     return response
-end
-
-local function torr_osd()
-    local osd_title
-    if state == State.HIDDEN then
-        mp.osd_message("")
-        return
-    elseif state == State.TORRENTS then
-        osd_title = "torrent list"
-    elseif state == State.FILES then
-        osd_title = "torrent content"
-    end
-
-    local text = "TorrServer - " .. osd_title .. "\n\n"
-
-    local start = offset + 1
-    local finish = math.min(offset + VISIBLE_LINES, #menu)
-
-    for i = start, finish do
-        text = text
-            .. ((i == cursor_pos) and "▶ " or "  ")
-            .. menu[i] .. "\n"
-    end
-
-    if #menu > VISIBLE_LINES then
-        text = text .. string.format("\n[%d/%d]", cursor_pos, #menu)
-    end
-
-    mp.osd_message(text, 60)
-end
-
-local function remove_menu_keys()
-    mp.remove_key_binding("torr_up")
-    mp.remove_key_binding("torr_down")
-    mp.remove_key_binding("torr_enter")
-    mp.remove_key_binding("torr_back")
-    mp.remove_key_binding("torr_close")
-end
-
-local function close_menu()
-    state = State.HIDDEN
-    remove_menu_keys()
-    mp.osd_message("")
 end
 
 -- external name
@@ -323,26 +274,7 @@ local function generate_m3u_edl(torrent)
     torrent.playlist = table.concat(playlist, '\n')
 end
 
-local function show_torrent_files(torrent)
-    menu = {}
-    cursor_pos = 1
-    offset = 0
-    state = State.FILES
-
-    generate_m3u_edl(torrent)
-
-    for _, fileinfo in ipairs(torrent.file_stats) do
-        if fileinfo.main_file then
-            table.insert(menu, fileinfo.filename)
-        end
-    end
-
-    torr_osd()
-end
-
 local function play_from_playlist(torrent, index)
-    close_menu()
-
     mp.osd_message("Opening " .. (torrent.name or torrent.title) .. "...")
 
     opened_btih = torrent.hash
@@ -350,73 +282,58 @@ local function play_from_playlist(torrent, index)
     mp.set_property_number("playlist-pos", index - 1)
 end
 
-local function enter()
-    if state == State.TORRENTS then
-        if not torrents[cursor_pos].file_stats then
-            local torrent = curl(TORRSERVER .. "/stream?link=" .. torrents[cursor_pos].hash .. "&stat")
-            if not torrent then return end
-            torrents[cursor_pos] = torrent
-        end
-        torrent_index = cursor_pos
-        show_torrent_files(torrents[cursor_pos])
-    elseif state == State.FILES then
-        play_from_playlist(torrents[torrent_index], cursor_pos)
+local function show_torrent_files(torrent)
+    if not torrents[torrent_index].file_stats then
+        torrent = curl(TORRSERVER .. "/stream?link=" .. torrents[torrent_index].hash .. "&stat")
+        if not torrent then return end
+        torrents[torrent_index] = torrent
     end
+
+    generate_m3u_edl(torrent)
+
+    local items = {}
+    for i, entry in ipairs(torrent.file_stats) do
+        if entry.main_file then
+            items[i] = entry.filename
+        end
+    end
+
+    local selected = false
+    input.select({
+        prompt = "Select an entry of torrent:",
+        items = items,
+
+        submit = function (index)
+            selected = true
+            play_from_playlist(torrents[torrent_index], index)
+        end,
+        closed = function ()
+            if selected then return end
+
+            show_torrents(torrent_index)
+        end,
+    })
 end
 
-local function add_menu_keys()
-    mp.add_forced_key_binding("UP", "torr_up", function()
-        if cursor_pos > 1 then
-            cursor_pos = cursor_pos - 1
-
-            if cursor_pos <= offset then
-                offset = math.max(0, cursor_pos - 1)
-            end
-
-            torr_osd()
-        end
-    end, { repeatable = true })
-
-    mp.add_forced_key_binding("DOWN", "torr_down", function()
-        if cursor_pos < #menu then
-            cursor_pos = cursor_pos + 1
-
-            if cursor_pos > offset + VISIBLE_LINES then
-                offset = cursor_pos - VISIBLE_LINES
-            end
-
-            torr_osd()
-        end
-    end, { repeatable = true })
-
-    mp.add_forced_key_binding("ENTER", "torr_enter", enter)
-    mp.add_forced_key_binding("BS", "torr_back", back)
-    mp.add_forced_key_binding("ESC", "torr_close", close_menu)
-end
-
-local function show_torrents()
+show_torrents = function (default_item)
     torrents = curl(TORRSERVER .. "/torrents", '{"action":"list"}')
     if not torrents then return end
 
-    menu = {}
-    cursor_pos = 1
-    offset = 0
-    state = State.TORRENTS
-    add_menu_keys()
-
-    for _, t in ipairs(torrents) do
-        table.insert(menu, t.name or t.title)
+    local items = {}
+    for i, entry in ipairs(torrents) do
+        items[i] = entry.name or entry.title
     end
 
-    torr_osd()
-end
+    input.select({
+        prompt = "Select a torrent:",
+        items = items,
+        default_item = default_item,
 
-back = function()
-    if state == State.FILES then
-        show_torrents()
-    else
-        close_menu()
-    end
+        submit = function (index)
+            torrent_index = index
+            show_torrent_files(torrents[index])
+        end,
+    })
 end
 
 mp.add_key_binding("Ctrl+t", "torr_open", show_torrents)
