@@ -289,12 +289,26 @@ local function show_torrent_files(torrent)
         torrents[torrent_index] = torrent
     end
 
+    local viewed_list = curl(TORRSERVER .. "/viewed", '{"action":"list","hash":"' .. torrent.hash ..'"}')
+    if not viewed_list then viewed_list = {} end
+
     generate_m3u_edl(torrent)
 
     local items = {}
+    local last_viewed
     for i, entry in ipairs(torrent.file_stats) do
         if entry.main_file then
-            items[i] = entry.filename
+            for _, entry2 in ipairs(viewed_list) do
+                if entry2.file_index == entry.id then
+                    last_viewed = i
+                    break
+                end
+            end
+            if i == last_viewed then
+                items[i] = "> " .. entry.filename
+            else
+                items[i] = "   " ..entry.filename
+            end
         end
     end
 
@@ -302,6 +316,7 @@ local function show_torrent_files(torrent)
     input.select({
         prompt = "Select an entry of torrent:",
         items = items,
+        default_item = last_viewed,
 
         submit = function (index)
             selected = true
