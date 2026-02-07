@@ -170,6 +170,14 @@ local function bytes_to_gb(bytes)
 end
 
 local function show_torrent_load_info(torr, file_ind)
+    local dcd = mp.get_property_number("demuxer-cache-duration", nil)
+    local current_state_loading = ''
+    if not dcd then
+        current_state_loading = 'Opening'
+    elseif dcd < 1.0 then
+        current_state_loading = 'Caching'
+    end
+
     local download_speed = humanize_speed(torr.download_speed or 0)
 
     local preloaded_gb = bytes_to_gb(torr.loaded_size or 0)
@@ -186,12 +194,17 @@ local function show_torrent_load_info(torr, file_ind)
         ext_files = string.format("Connected %d / %d external files, Errors: %d", filename.loaded_ext_files or 0, filename.count_ext_tracks, filename.error_ext_files or 0)
         if next(loadings) then
             timeout = 99
+            if #current_state_loading > 0 then
+                current_state_loading = current_state_loading .. ' / Connecting external files'
+            else
+                current_state_loading = 'Connecting external files'
+            end
         end
     end
 
     local message = string.format(
-            "Caching...\n\nTorrent load info:\nSpeed: %s\nCache: %s / %s GB\nPeers·Seeders: %s\n\n%s",
-            download_speed, preloaded_gb, total_gb, peers_info, ext_files
+            "Loading %s...\nCurrent state: %s\n\nTorrent load info:\nSpeed: %s\nCache: %s / %s GB\nPeers·Seeders: %s\n\n%s",
+            filename.filename, current_state_loading, download_speed, preloaded_gb, total_gb, peers_info, ext_files
     )
     mp.osd_message(message, timeout)
 end
