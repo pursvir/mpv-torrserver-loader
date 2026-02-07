@@ -8,7 +8,8 @@ local input = require "mp.input"
 local options = {
     scheme = "http",
     host = "127.0.0.1",
-    port = "8090"
+    port = "8090",
+    use_edl = true
 }
 require "mp.options".read_options(options, "torrserver-loader")
 
@@ -16,6 +17,7 @@ local TORRSERVER = options.scheme .. "://" .. options.host .. ":" .. options.por
 
 local torrent
 local file_index = 1
+local loadings = {}
 
 local show_torrents
 
@@ -145,6 +147,8 @@ local function is_buffering(cache_time)
     end
     if cache_time < 1 then
         return true
+    elseif not options.use_edl and next(loadings) then
+        return true
     end
     return false
 end
@@ -173,11 +177,23 @@ local function show_torrent_load_info(torr, file_ind)
 
     local peers_info = string.format("%d / %d · %d", torr.active_peers or 0, torr.total_peers or 0, torr.connected_seeders or 0)
 
+    local ext_files
+    local filename = torr.file_stats[file_ind]
+    local timeout
+    if options.use_edl then
+        ext_files = "Connected " .. filename.count_ext_tracks .. " external files"
+    else
+        ext_files = string.format("Connected %d / %d external files, Errors: %d", filename.loaded_ext_files or 0, filename.count_ext_tracks, filename.error_ext_files or 0)
+        if next(loadings) then
+            timeout = 99
+        end
+    end
+
     local message = string.format(
-            "Caching...\n\nTorrent load info:\nSpeed: %s\nCache: %s / %s GB\nPeers·Seeders: %s",
-            download_speed, preloaded_gb, total_gb, peers_info
+            "Caching...\n\nTorrent load info:\nSpeed: %s\nCache: %s / %s GB\nPeers·Seeders: %s\n\n%s",
+            download_speed, preloaded_gb, total_gb, peers_info, ext_files
     )
-    mp.osd_message(message)
+    mp.osd_message(message, timeout)
 end
 
 local update_timer
@@ -308,15 +324,17 @@ local function generate_m3u_edl(torr)
                     if not fileinfo2.type then
                         fileinfo2.type = AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"
                     end
-                    -- TODO: check if we can assign those values to upper url and hdr vars
-                    local url_ext = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo2.id .. "&play"
-                    local hdr_ext = {
-                        "!new_stream", "!no_clip", "!no_chapters",
-                        "!delay_open,media_type=" .. fileinfo2.type,
-                        "!track_meta,title=" .. edlencode(fileinfo2.title .. " [external]"),
-                        edlencode(url_ext)
-                    }
-                    edl = edl .. table.concat(hdr_ext, ";") .. ";"
+                    if options.use_edl then
+                        -- TODO: check if we can assign those values to upper url and hdr vars
+                        local url_ext = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo2.id .. "&play"
+                        local hdr_ext = {
+                            "!new_stream", "!no_clip", "!no_chapters",
+                            "!delay_open,media_type=" .. fileinfo2.type,
+                            "!track_meta,title=" .. edlencode(fileinfo2.title .. " [external]"),
+                            edlencode(url_ext)
+                        }
+                        edl = edl .. table.concat(hdr_ext, ";") .. ";"
+                    end
                     fileinfo2.processed = true
                     count = count + 1
                     external_tracks = external_tracks + 1
@@ -324,7 +342,7 @@ local function generate_m3u_edl(torr)
             end
             fileinfo.count_ext_tracks = external_tracks
 
-            if external_tracks == 0 then -- dont use edl
+            if not options.use_edl or external_tracks == 0 then -- dont use edl
                 table.insert(playlist, url)
             else
                 table.insert(playlist, edl)
@@ -455,7 +473,46 @@ local function is_torrserver(path)
 end
 
 
+local function connect_external_assets()
+    if not torrent then return end
+
+    if options.use_edl then return end
+
+    local main_fileinfo = torrent.file_stats[file_index]
+    main_fileinfo.loaded_ext_files = 0
+    main_fileinfo.error_ext_files = 0
+    for _, i_ext in ipairs(main_fileinfo.ext_files) do
+        local ext_fileinfo = torrent.file_stats[i_ext]
+        local url_ext = TORRSERVER .. "/stream?link=" .. torrent.hash .. "&index=" .. ext_fileinfo.id .. "&play"
+        local cmd = ext_fileinfo.type == 'audio' and "audio-add" or "sub-add"
+
+        local request_id
+        request_id = mp.command_native_async({ cmd, url_ext, "auto", ext_fileinfo.title }, function(success)
+            loadings[request_id] = nil
+
+            if success then
+                main_fileinfo.loaded_ext_files = main_fileinfo.loaded_ext_files + 1
+            else
+                main_fileinfo.error_ext_files = main_fileinfo.error_ext_files + 1
+            end
+
+            show_torrent_load_info(torrent, file_index)
+        end)
+
+        loadings[request_id] = true
+    end
+end
+
+local function abort_loadings()
+    for request_id in pairs(loadings) do
+        mp.abort_async_command(request_id)
+    end
+    loadings = {}
+end
+
 local function load_external_assets()
+    abort_loadings()
+
     local path = mp.get_property("path", "")
     if not is_torrserver(path) then
         torrent = nil
@@ -465,6 +522,7 @@ local function load_external_assets()
     file_index = mp.get_property_number("playlist-pos-1", 1)
 
     if mp.get_property("playlist-path", ""):find("# Generated by TorrServer-Loader", 1, true) then
+        connect_external_assets()
         timer_torrent_load_info()
         return
     end
