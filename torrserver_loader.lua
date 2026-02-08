@@ -157,16 +157,16 @@ local function humanize_speed(speed)
     if not speed or speed == 0 then return "0 bps" end
 
     local bps = speed * 8
-    local units = {"bps", "kbps", "Mbps", "Gbps", "Tbps"}
+    local units = { "bps", "kbps", "Mbps", "Gbps", "Tbps" }
     local i = math.floor(math.log(bps) / math.log(1000))
     if i > #units then i = #units end
 
     local value = bps / (1000 ^ i)
-    return string.format("%.2f %s", value, units[i+1])
+    return string.format("%.2f %s", value, units[i + 1])
 end
 
 local function bytes_to_gb(bytes)
-    return string.format("%.2f", bytes / (1024^3))
+    return string.format("%.2f", bytes / (1024 ^ 3))
 end
 
 local function show_torrent_load_info(torr, file_ind)
@@ -183,7 +183,8 @@ local function show_torrent_load_info(torr, file_ind)
     local preloaded_gb = bytes_to_gb(torr.loaded_size or 0)
     local total_gb = bytes_to_gb(torr.capacity or 0)
 
-    local peers_info = string.format("%d / %d · %d", torr.active_peers or 0, torr.total_peers or 0, torr.connected_seeders or 0)
+    local peers_info = string.format("%d / %d · %d", torr.active_peers or 0, torr.total_peers or 0,
+        torr.connected_seeders or 0)
 
     local ext_files
     local filename = torr.file_stats[file_ind]
@@ -191,7 +192,8 @@ local function show_torrent_load_info(torr, file_ind)
     if options.use_edl then
         ext_files = "Connected " .. filename.count_ext_tracks .. " external files"
     else
-        ext_files = string.format("Connected %d / %d external files, Errors: %d", filename.loaded_ext_files or 0, filename.count_ext_tracks, filename.error_ext_files or 0)
+        ext_files = string.format("Connected %d / %d external files, Errors: %d", filename.loaded_ext_files or 0,
+            filename.count_ext_tracks, filename.error_ext_files or 0)
         if next(loadings) then
             timeout = 99
             if #current_state_loading > 0 then
@@ -203,8 +205,8 @@ local function show_torrent_load_info(torr, file_ind)
     end
 
     local message = string.format(
-            "Loading %s...\nCurrent state: %s\n\nTorrent load info:\nSpeed: %s\nCache: %s / %s GB\nPeers·Seeders: %s\n\n%s",
-            filename.filename, current_state_loading, download_speed, preloaded_gb, total_gb, peers_info, ext_files
+        "Loading %s...\nCurrent state: %s\n\nTorrent load info:\nSpeed: %s\nCache: %s / %s GB\nPeers·Seeders: %s\n\n%s",
+        filename.filename, current_state_loading, download_speed, preloaded_gb, total_gb, peers_info, ext_files
     )
     mp.osd_message(message, timeout)
 end
@@ -332,14 +334,15 @@ local function generate_m3u_edl(torr)
                 if not fileinfo2.processed and not VIDEO_EXTS[fileinfo2.ext] and string.find(fileinfo2.name, fileinfo.name, 1, true) then
                     --mp.msg.info("Attached external track: " .. fileinfo2.name)
                     fileinfo2.title = format_external_filename(fileinfo.name, fileinfo2.path, torr.name) or
-                    ("Unknown name (Index " .. fileinfo2.id .. ")")
+                        ("Unknown name (Index " .. fileinfo2.id .. ")")
                     table.insert(fileinfo.ext_files, i)
                     if not fileinfo2.type then
                         fileinfo2.type = AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"
                     end
                     if options.use_edl then
                         -- TODO: check if we can assign those values to upper url and hdr vars
-                        local url_ext = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo2.id .. "&play"
+                        local url_ext = TORRSERVER ..
+                        "/stream?link=" .. torr.hash .. "&index=" .. fileinfo2.id .. "&play"
                         local hdr_ext = {
                             "!new_stream", "!no_clip", "!no_chapters",
                             "!delay_open,media_type=" .. fileinfo2.type,
@@ -389,13 +392,22 @@ local function play_from_playlist(torrent_menu, index)
     mp.set_property_number("playlist-pos-1", index)
 end
 
+-- temporary solution to the problem
+-- https://github.com/mpv-player/mpv/pull/17256
+-- TODO: remove this after a stable release of MPV with a fix appears
+local function input_select(args)
+    mp.add_timeout(0.1, function()
+        input.select(args)
+    end)
+end
+
 local function show_torrent_files(torrent_menu, torrent_index)
     if not torrent_menu.file_stats then
         torrent_menu = curl(TORRSERVER .. "/stream?link=" .. torrent_menu.hash .. "&stat")
         if not torrent_menu then return end
     end
 
-    local viewed_list = curl(TORRSERVER .. "/viewed", '{"action":"list","hash":"' .. torrent_menu.hash ..'"}')
+    local viewed_list = curl(TORRSERVER .. "/viewed", '{"action":"list","hash":"' .. torrent_menu.hash .. '"}')
     if not viewed_list then viewed_list = {} end
 
     generate_m3u_edl(torrent_menu)
@@ -413,22 +425,22 @@ local function show_torrent_files(torrent_menu, torrent_index)
             if i == last_viewed then
                 items[i] = "> " .. entry.filename
             else
-                items[i] = "   " ..entry.filename
+                items[i] = "   " .. entry.filename
             end
         end
     end
 
     local selected = false
-    input.select({
+    input_select({
         prompt = "Select an entry of torrent:",
         items = items,
         default_item = last_viewed,
 
-        submit = function (index)
+        submit = function(index)
             selected = true
             play_from_playlist(torrent_menu, index)
         end,
-        closed = function ()
+        closed = function()
             if selected then return end
 
             show_torrents(torrent_index)
@@ -436,7 +448,7 @@ local function show_torrent_files(torrent_menu, torrent_index)
     })
 end
 
-show_torrents = function (default_item)
+show_torrents = function(default_item)
     local torrents = curl(TORRSERVER .. "/torrents", '{"action":"list"}')
     if not torrents then return end
 
@@ -445,12 +457,12 @@ show_torrents = function (default_item)
         items[i] = entry.name or entry.title
     end
 
-    input.select({
+    input_select({
         prompt = "Select a torrent:",
         items = items,
         default_item = default_item,
 
-        submit = function (index)
+        submit = function(index)
             show_torrent_files(torrents[index], index)
         end,
     })
