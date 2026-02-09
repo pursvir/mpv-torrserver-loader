@@ -370,7 +370,7 @@ local function generate_m3u(torr)
                 fileinfo.processed = true
                 table.insert(torr.main_files, i)
                 table.insert(playlist, '#EXTINF:0,' .. fileinfo.name)
-                url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
+                local url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
                 table.insert(playlist, url)
             end
         end
@@ -527,16 +527,8 @@ local function abort_loadings()
     loadings = {}
 end
 
-local is_torrserver_path = false
-
 local function load_external_assets()
-    abort_loadings()
-
     local path = mp.get_property("path", "")
-    if not is_torrserver_path then
-        torrent = nil
-        return
-    end
 
     playing_pos = mp.get_property_number("playlist-pos-1", 1)
 
@@ -593,12 +585,15 @@ local function observe_demuxer_cache(_, value)
 end
 
 mp.add_hook("on_load", 5, function()
+    mp.unobserve_property(observe_demuxer_cache)
+
     local path = mp.get_property("path", "")
-    is_torrserver_path = is_torrserver(path)
+    local is_torrserver_path = is_torrserver(path)
     if is_torrserver_path then
-        mp.unobserve_property(observe_demuxer_cache)
         mp.observe_property("demuxer-cache-duration", "number", observe_demuxer_cache)
     end
+
+    abort_loadings()
     load_external_assets()
 end)
 
