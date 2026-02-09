@@ -527,7 +527,12 @@ local function abort_loadings()
     loadings = {}
 end
 
+local is_torrserver_path = false
+
 local function load_external_assets()
+    if not is_torrserver_path then
+        return
+    end
     local path = mp.get_property("path", "")
 
     playing_pos = mp.get_property_number("playlist-pos-1", 1)
@@ -588,7 +593,7 @@ mp.add_hook("on_load", 5, function()
     mp.unobserve_property(observe_demuxer_cache)
 
     local path = mp.get_property("path", "")
-    local is_torrserver_path = is_torrserver(path)
+    is_torrserver_path = is_torrserver(path)
     if is_torrserver_path then
         mp.observe_property("demuxer-cache-duration", "number", observe_demuxer_cache)
     end
