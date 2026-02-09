@@ -145,12 +145,7 @@ local function is_buffering(cache_time)
     if not cache_time then
         cache_time = mp.get_property_number("demuxer-cache-duration", 0)
     end
-    if cache_time < 1 then
-        return true
-    elseif not options.use_edl and next(loadings) then
-        return true
-    end
-    return false
+    return cache_time < 1 or (not options.use_edl and next(loadings))
 end
 
 local function humanize_speed(speed)
@@ -165,7 +160,7 @@ local function humanize_speed(speed)
     return string.format("%.2f %s", value, units[i + 1])
 end
 
-local function bytes_to_gb(bytes)
+local function convert_bytes_to_gb(bytes)
     return string.format("%.2f", bytes / (1024 ^ 3))
 end
 
@@ -180,8 +175,8 @@ local function show_torrent_load_info(torr, p_pos)
 
     local download_speed = humanize_speed(torr.download_speed or 0)
 
-    local preloaded_gb = bytes_to_gb(torr.loaded_size or 0)
-    local total_gb = bytes_to_gb(torr.capacity or 0)
+    local preloaded_gb = convert_bytes_to_gb(torr.loaded_size or 0)
+    local total_gb = convert_bytes_to_gb(torr.capacity or 0)
 
     local peers_info = string.format("%d / %d · %d", torr.active_peers or 0, torr.total_peers or 0,
         torr.connected_seeders or 0)
@@ -190,10 +185,10 @@ local function show_torrent_load_info(torr, p_pos)
     local filename = torr.file_stats[torr.main_files[p_pos]]
     local timeout
     if options.use_edl then
-        ext_files = "Connected " .. filename.count_ext_tracks .. " external files"
+        ext_files = "Connected " .. filename.ext_tracks_count .. " external files"
     else
         ext_files = string.format("Connected %d / %d external files, Errors: %d", filename.loaded_ext_files or 0,
-            filename.count_ext_tracks, filename.error_ext_files or 0)
+            filename.ext_tracks_count, filename.error_ext_files or 0)
         if next(loadings) then
             timeout = 99
             if #current_state_loading > 0 then
@@ -212,7 +207,8 @@ local function show_torrent_load_info(torr, p_pos)
 end
 
 local update_timer
-local function timer_torrent_load_info()
+local TIMER_TIMEOUT = 0.5
+local function init_torrent_loading_timer()
     if not torrent or not is_buffering() then
         if update_timer then
             update_timer:kill()
@@ -220,7 +216,7 @@ local function timer_torrent_load_info()
         end
         return
     elseif not update_timer then
-        update_timer = mp.add_periodic_timer(0.5, timer_torrent_load_info)
+        update_timer = mp.add_periodic_timer(TIMER_TIMEOUT, init_torrent_loading_timer)
     end
     local cache = curl(TORRSERVER .. "/cache", '{"action":"get","hash":"' .. torrent.hash .. '"}', true)
     if not cache then return end
@@ -255,9 +251,9 @@ local function remove_duplicate_words(str)
     local seen = {}
     local result = {}
 
-    -- a function for clearing words from quotation marks/brackets and reducing them to lowercase
+    -- A function for clearing words from quotation marks/brackets and reducing them to lowercase
     local function clean_word(word)
-        -- we remove all [], (), "" and spaces inside, and reduce them to lowercase
+        -- We remove all [], (), "" and spaces inside, and reduce them to lowercase
         word = word:gsub("[%[%]()\"]", ""):gsub("%s+", "")
         return word:lower()
     end
@@ -266,7 +262,7 @@ local function remove_duplicate_words(str)
         local cleaned = clean_word(word)
         if cleaned and not seen[cleaned] then
             seen[cleaned] = true
-            table.insert(result, word) -- inserting the original word with quotes/brackets
+            table.insert(result, word) -- Inserting the original word with quotes/brackets
         end
     end
 
@@ -274,13 +270,13 @@ local function remove_duplicate_words(str)
 end
 
 local function format_external_filename(basename, filename_path, torrent_name)
-    -- removing the file extension
+    -- Removing the file extension
     local name = filename_path:match("^(.*)%.%w+$")
-    -- removing the base file name
+    -- Removing the base file name
     name = replace(name, basename)
-    -- deleting the torrent name (usually the name of the root folder)
+    -- Deleting the torrent name (usually the name of the root folder)
     name = replace(name, torrent_name)
-    -- removing the dots "." and slashes "/"
+    -- Removing the dots "." and slashes "/"
     name = name:gsub("[./]", " ")
     name = remove_extra_spaces(name)
     name = remove_duplicate_words(name)
@@ -301,7 +297,7 @@ local function extend_with_extra_fileinfo(fileinfo)
 end
 
 -- https://github.com/mpv-player/mpv/blob/master/DOCS/edl-mpv.rst
-local function generate_m3u_edl(torr)
+local function generate_m3u(torr)
     -- Portions of this code are derived from https://github.com/dyphire/mpv-scripts/blob/main/mpv-torrserver.lua#L123
     -- Copyright (c) <2022> dyphire
     -- Licensed under the MIT License https://github.com/dyphire/mpv-scripts/blob/main/LICENSE
@@ -310,15 +306,17 @@ local function generate_m3u_edl(torr)
     local count = 0
     torr.main_files = {}
 
+    local url
+    local hdr
+
     for i, fileinfo in ipairs(torr.file_stats) do
         if not fileinfo.filename then extend_with_extra_fileinfo(fileinfo) end
 
         if not fileinfo.processed and VIDEO_EXTS[fileinfo.ext] then
             table.insert(playlist, '#EXTINF:0,' .. fileinfo.name)
 
-            local url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
-            local hdr = { "!new_stream", "!no_clip",
-                --"!track_meta,title=" .. edlencode(basename),
+            url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
+            hdr = { "!new_stream", "!no_clip",
                 edlencode(url)
             }
             local edl = "edl://" .. table.concat(hdr, ";") .. ";"
@@ -329,37 +327,38 @@ local function generate_m3u_edl(torr)
             if not fileinfo.ext_files then fileinfo.ext_files = {} end
             count = count + 1
             --mp.msg.info("Attached main file: " .. fileinfo.name)
-            for i2, fileinfo2 in ipairs(torr.file_stats) do
-                if not fileinfo2.filename then extend_with_extra_fileinfo(fileinfo2) end
+            for j, extra_fileinfo in ipairs(torr.file_stats) do
+                if not extra_fileinfo.filename then extend_with_extra_fileinfo(extra_fileinfo) end
 
-                if not fileinfo2.processed and not VIDEO_EXTS[fileinfo2.ext] and string.find(fileinfo2.name, fileinfo.name, 1, true) then
+                if not extra_fileinfo.processed
+                    and not VIDEO_EXTS[extra_fileinfo.ext]
+                    and string.find(extra_fileinfo.name, fileinfo.name, 1, true) then
                     --mp.msg.info("Attached external track: " .. fileinfo2.name)
-                    fileinfo2.title = format_external_filename(fileinfo.name, fileinfo2.path, torr.name) or
-                        ("Unknown name (Index " .. fileinfo2.id .. ")")
-                    table.insert(fileinfo.ext_files, i2)
-                    if not fileinfo2.type then
-                        fileinfo2.type = AUDIO_EXTS[fileinfo2.ext] and "audio" or "sub"
+                    extra_fileinfo.title = format_external_filename(fileinfo.name, extra_fileinfo.path, torr.name) or
+                        ("Unknown name (Index " .. extra_fileinfo.id .. ")")
+                    table.insert(fileinfo.ext_files, j)
+                    if not extra_fileinfo.type then
+                        extra_fileinfo.type = AUDIO_EXTS[extra_fileinfo.ext] and "audio" or "sub"
                     end
                     if options.use_edl then
-                        -- TODO: check if we can assign those values to upper url and hdr vars
-                        local url_ext = TORRSERVER ..
-                        "/stream?link=" .. torr.hash .. "&index=" .. fileinfo2.id .. "&play"
-                        local hdr_ext = {
+                        url = TORRSERVER ..
+                            "/stream?link=" .. torr.hash .. "&index=" .. extra_fileinfo.id .. "&play"
+                        hdr = {
                             "!new_stream", "!no_clip", "!no_chapters",
-                            "!delay_open,media_type=" .. fileinfo2.type,
-                            "!track_meta,title=" .. edlencode(fileinfo2.title .. " [external]"),
-                            edlencode(url_ext)
+                            "!delay_open,media_type=" .. extra_fileinfo.type,
+                            "!track_meta,title=" .. edlencode(extra_fileinfo.title .. " [external]"),
+                            edlencode(url)
                         }
-                        edl = edl .. table.concat(hdr_ext, ";") .. ";"
+                        edl = edl .. table.concat(hdr, ";") .. ";"
                     end
-                    fileinfo2.processed = true
+                    extra_fileinfo.processed = true
                     count = count + 1
                     external_tracks = external_tracks + 1
                 end
             end
-            fileinfo.count_ext_tracks = external_tracks
+            fileinfo.ext_tracks_count = external_tracks
 
-            if not options.use_edl or external_tracks == 0 then -- dont use edl
+            if not options.use_edl or external_tracks == 0 then
                 table.insert(playlist, url)
             else
                 table.insert(playlist, edl)
@@ -367,14 +366,14 @@ local function generate_m3u_edl(torr)
         end
     end
 
-    -- if this playlist is audio only
+    -- If this playlist is audio only
     if #torr.file_stats > count then
         for i, fileinfo in ipairs(torr.file_stats) do
             if not fileinfo.processed and AUDIO_EXTS[fileinfo.ext] then
                 fileinfo.processed = true
                 table.insert(torr.main_files, i)
                 table.insert(playlist, '#EXTINF:0,' .. fileinfo.name)
-                local url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
+                url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
                 table.insert(playlist, url)
             end
         end
@@ -393,9 +392,8 @@ local function play_from_playlist(torrent_menu, index)
     mp.set_property_number("playlist-pos-1", index)
 end
 
--- temporary solution to the problem
--- https://github.com/mpv-player/mpv/pull/17256
--- TODO: remove this after a stable release of MPV with a fix appears
+-- A temporary solution to the problem described here: https://github.com/mpv-player/mpv/pull/17256
+-- TODO: remove this after a stable release of MPV where it'll be fixed
 local function input_select(args)
     mp.add_timeout(0.1, function()
         input.select(args)
@@ -411,7 +409,7 @@ local function show_torrent_files(torrent_menu, torrent_index)
     local viewed_list = curl(TORRSERVER .. "/viewed", '{"action":"list","hash":"' .. torrent_menu.hash .. '"}')
     if not viewed_list then viewed_list = {} end
 
-    generate_m3u_edl(torrent_menu)
+    generate_m3u(torrent_menu)
 
     local items = {}
     local last_viewed
@@ -424,7 +422,7 @@ local function show_torrent_files(torrent_menu, torrent_index)
             end
         end
         if i == last_viewed then
-            table.insert(items, "> " .. filename.filename)
+            table.insert(items, "x " .. filename.filename)
         else
             table.insert(items, "   " .. filename.filename)
         end
@@ -482,9 +480,6 @@ for _, host in ipairs(LOCAL_HOSTS) do
 end
 
 local function is_torrserver(path)
-    if not path then
-        path = mp.get_property("path", "")
-    end
     if torrserver_is_localhost then
         for _, host in ipairs(LOCAL_HOSTS) do
             if path:find(options.scheme .. "://" .. host .. ":" .. options.port, 1, true) then
@@ -535,11 +530,13 @@ local function abort_loadings()
     loadings = {}
 end
 
+local is_torrserver_path = false
+
 local function load_external_assets()
     abort_loadings()
 
     local path = mp.get_property("path", "")
-    if not is_torrserver(path) then
+    if not is_torrserver_path then
         torrent = nil
         return
     end
@@ -548,7 +545,7 @@ local function load_external_assets()
 
     if mp.get_property("playlist-path", ""):find("# Generated by TorrServer-Loader", 1, true) then
         connect_external_assets()
-        timer_torrent_load_info()
+        init_torrent_loading_timer()
         return
     end
     local btih = path:match("%link=(" .. string.rep(".", 40) .. ")")
@@ -568,7 +565,7 @@ local function load_external_assets()
     end
 
     if not torrent.playlist then
-        generate_m3u_edl(torrent)
+        generate_m3u(torrent)
     end
 
     -- finding pos of playlist
@@ -591,7 +588,19 @@ local function load_external_assets()
     mp.set_property_number("playlist-pos-1", play_index)
 end
 
-mp.add_hook("on_load", 5, load_external_assets)
+mp.add_hook("on_load", 5, function()
+    local path = mp.get_property("path", "")
+    is_torrserver_path = is_torrserver(path)
+    if is_torrserver_path then
+        mp.observe_property("demuxer-cache-duration", "number", function(_, value)
+            if not value or update_timer or not torrent or not is_buffering(value) then
+                return
+            end
+            init_torrent_loading_timer()
+        end)
+    end
+    load_external_assets()
+end)
 
 -- By default, edl inserts a chapter with a link in the name, we fix this by deleting it.
 -- https://github.com/mpv-player/mpv/blob/master/DOCS/edl-mpv.rst#implicit-chapters
@@ -616,12 +625,3 @@ local function fix_edl_chapters()
 end
 
 mp.add_hook("on_preloaded", 5, fix_edl_chapters)
-
-mp.observe_property("demuxer-cache-duration", "number", function(_, value)
-    if not value then return end
-    if update_timer or not torrent or not is_buffering(value) then
-        return
-    end
-
-    timer_torrent_load_info()
-end)
