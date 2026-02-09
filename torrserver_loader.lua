@@ -306,17 +306,14 @@ local function generate_m3u(torr)
     local count = 0
     torr.main_files = {}
 
-    local url
-    local hdr
-
     for i, fileinfo in ipairs(torr.file_stats) do
         if not fileinfo.filename then extend_with_extra_fileinfo(fileinfo) end
 
         if not fileinfo.processed and VIDEO_EXTS[fileinfo.ext] then
             table.insert(playlist, '#EXTINF:0,' .. fileinfo.name)
 
-            url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
-            hdr = { "!new_stream", "!no_clip",
+            local url = TORRSERVER .. "/stream?link=" .. torr.hash .. "&index=" .. fileinfo.id .. "&play"
+            local hdr = { "!new_stream", "!no_clip",
                 edlencode(url)
             }
             local edl = "edl://" .. table.concat(hdr, ";") .. ";"
@@ -588,16 +585,19 @@ local function load_external_assets()
     mp.set_property_number("playlist-pos-1", play_index)
 end
 
+local function observe_demuxer_cache(_, value)
+    if not value or update_timer or not torrent or not is_buffering(value) then
+        return
+    end
+    init_torrent_loading_timer()
+end
+
 mp.add_hook("on_load", 5, function()
     local path = mp.get_property("path", "")
     is_torrserver_path = is_torrserver(path)
     if is_torrserver_path then
-        mp.observe_property("demuxer-cache-duration", "number", function(_, value)
-            if not value or update_timer or not torrent or not is_buffering(value) then
-                return
-            end
-            init_torrent_loading_timer()
-        end)
+        mp.unobserve_property(observe_demuxer_cache)
+        mp.observe_property("demuxer-cache-duration", "number", observe_demuxer_cache)
     end
     load_external_assets()
 end)
