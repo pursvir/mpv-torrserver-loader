@@ -392,7 +392,7 @@ end
 -- A temporary solution to the problem described here: https://github.com/mpv-player/mpv/pull/17256
 -- TODO: remove this after a stable release of MPV where it'll be fixed
 local function input_select(args)
-    mp.add_timeout(0.1, function()
+    mp.add_timeout(0.01, function()
         input.select(args)
     end)
 end
